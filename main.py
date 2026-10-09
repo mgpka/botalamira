@@ -1,20 +1,40 @@
 # main.py
+import os
 import asyncio
-from hydrogram import Client, filters
+from aiohttp import web
+from hydrogram import Client, filters, enums
 from hydrogram.types import (
     Message, 
     InlineKeyboardMarkup, 
     InlineKeyboardButton,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    ChatMemberUpdated
+    ReplyKeyboardMarkup, 
+    KeyboardButton
 )
-from hydrogram.enums import ChatMemberStatus, ChatType
+from hydrogram.enums import ChatMemberStatus
 
 import config
 import database as db
 from ai_engine import ask_gemini
 
+# ==========================================
+# 0. خادم ويب داخلي مخصص لإرضاء فحص Render ومنع الإيقاف
+# ==========================================
+async def start_web_server():
+    async def handle(request):
+        return web.Response(text="سورس الأمراء شغال أونلاين بنجاح! 🚀")
+
+    server = web.Application()
+    server.router.add_get("/", handle)
+    runner = web.AppRunner(server)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"🌐 تم تشغيل منفذ الويب الداخلي بنجاح على البورت: {port}")
+
+# ==========================================
+# 1. إعداد عميل البوت
+# ==========================================
 app = Client(
     "AlOmaraa_Bot",
     api_id=config.API_ID,
@@ -22,9 +42,7 @@ app = Client(
     bot_token=config.BOT_TOKEN
 )
 
-# ==========================================
-# 1. كيبورد المطور الخاص (Private Dev Panel)
-# ==========================================
+# كيبورد المطور الخاص
 DEV_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("قسم الاشتراك الاجباري ▽"), KeyboardButton("اوامر الاذاعه ▽")],
@@ -46,14 +64,9 @@ DEV_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ==========================================
-# 2. أمر البداية (/start)
-# ==========================================
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
     user_id = message.from_user.id
-    
-    # إذا كان المرسل هو المطور الأساسي
     if user_id == config.DEV_ID:
         caption = (
             "▽ : اهلا بك عزيزي المطور\n"
@@ -63,7 +76,6 @@ async def start_handler(client: Client, message: Message):
         )
         return await message.reply_text(caption, reply_markup=DEV_KEYBOARD)
 
-    # للأعضاء العاديين
     welcome_text = (
         f"▽ : أهلا بك في بوت {config.BOT_NAME}\n"
         "▽ : لحماية المجموعات من التفليش\n"
@@ -72,7 +84,6 @@ async def start_handler(client: Client, message: Message):
         "▽ : ارسل {{ تفعيل }} ليتم تفعيل المجموعه\n"
         f"▽ : يوزر البوت ← @{client.me.username}"
     )
-    
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("➕ اضفني لمجموعتك", url=f"https://t.me/{client.me.username}?startgroup=true"),
@@ -82,19 +93,10 @@ async def start_handler(client: Client, message: Message):
             InlineKeyboardButton("لتنصيب بوت ↗️", url=f"https://t.me/{config.DEV_USER}"),
             InlineKeyboardButton("المطور ↗️", url=f"https://t.me/{config.DEV_USER}")
         ],
-        [
-            InlineKeyboardButton("اوامر الاعضاء", callback_data="member_cmds")
-        ],
-        [
-            InlineKeyboardButton("سورس الأمراء ™️", url=config.SOURCE_CHANNEL)
-        ]
+        [InlineKeyboardButton("سورس الأمراء ™️", url=config.SOURCE_CHANNEL)]
     ])
-    
     await message.reply_text(welcome_text, reply_markup=buttons)
 
-# ==========================================
-# 3. أمر المطور
-# ==========================================
 @app.on_message(filters.command(["المطور", "مطور"], prefixes="") & filters.group)
 async def dev_command(client: Client, message: Message):
     try:
@@ -109,18 +111,14 @@ async def dev_command(client: Client, message: Message):
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("لحظات الأمراء | moments princes ↗️", url=config.SOURCE_CHANNEL)]
         ])
-        
         photos = [p async for p in client.get_chat_photos(config.DEV_ID, limit=1)]
         if photos:
             await message.reply_photo(photo=photos[0].file_id, caption=caption, reply_markup=buttons)
         else:
             await message.reply_text(caption, reply_markup=buttons)
-    except Exception as e:
+    except Exception:
         await message.reply_text(f"المطور: @{config.DEV_USER}")
 
-# ==========================================
-# 4. أمر المالك
-# ==========================================
 @app.on_message(filters.command(["المالك", "مالك"], prefixes="") & filters.group)
 async def owner_command(client: Client, message: Message):
     owner = None
@@ -152,12 +150,9 @@ async def owner_command(client: Client, message: Message):
             await message.reply_photo(photo=photos[0].file_id, caption=caption, reply_markup=buttons)
         else:
             await message.reply_text(caption, reply_markup=buttons)
-    except Exception as e:
+    except Exception:
         await message.reply_text("حدث خطأ أثناء جلب معلومات المالك.")
 
-# ==========================================
-# 5. التفعيل والتعطيل والأوامر الأساسية
-# ==========================================
 @app.on_message(filters.command(["تفعيل"], prefixes="") & filters.group)
 async def activate_grp(client: Client, message: Message):
     await db.set_group_status(message.chat.id, message.chat.title, True)
@@ -168,12 +163,8 @@ async def deactivate_grp(client: Client, message: Message):
     await db.set_group_status(message.chat.id, message.chat.title, False)
     await message.reply_text("✗ تم تعطيل البوت في هذه المجموعة.")
 
-# ==========================================
-# 6. التفاعل الذكي (Google Gemini AI)
-# ==========================================
 @app.on_message(filters.group & ~filters.bot)
 async def ai_chat_handler(client: Client, message: Message):
-    # زيادة عداد رسائل العضو في القاعدة
     if message.from_user:
         await db.add_user_messages(message.from_user.id, 1)
 
@@ -184,7 +175,6 @@ async def ai_chat_handler(client: Client, message: Message):
     bot_name = config.BOT_NAME
     bot_username = client.me.username
 
-    # التحقق هل المنشن أو الرسالة موجهة للبوت
     is_reply_to_bot = (
         message.reply_to_message and 
         message.reply_to_message.from_user and 
@@ -193,34 +183,40 @@ async def ai_chat_handler(client: Client, message: Message):
     is_called_by_name = text.startswith(bot_name) or f"@{bot_username}" in text
 
     if is_reply_to_bot or is_called_by_name:
-        # إزالة اسم البوت من النص المرسل للذكاء الاصطناعي
         clean_text = text.replace(bot_name, "").replace(f"@{bot_username}", "").strip()
         if not clean_text:
             clean_text = "هلا شكو ماكو؟"
-        
-        # إرسال إشعار الكتابة
         await client.send_chat_action(message.chat.id, action=enums.ChatAction.TYPING)
-        
-        # استدعاء Gemini والرد
         reply = await ask_gemini(clean_text)
         await message.reply_text(reply)
 
+# محاولة تحميل الألعاب تلقائياً إن وجد الملف
+try:
+    import games
+except ImportError:
+    pass
+
 # ==========================================
-# 7. تشغيل البوت
+# 2. دالة التشغيل الرئيسية
 # ==========================================
 async def main():
+    # تشغيل خادم الويب أولاً لمنع انتهاء مهلة Render
+    await start_web_server()
+
     print("⏳ جاري فحص الاتصال بقاعدة بيانات MongoDB...")
-    db_connected = await db.ping_db()
-    if not db_connected:
-        print("❌ فشل الاتصال بقاعدة البيانات! يرجى التحقق من الرابط.")
-        return
-    
-    print("✅ تم الاتصال بقاعدة البيانات بنجاح!")
+    try:
+        db_connected = await asyncio.wait_for(db.ping_db(), timeout=10)
+        if db_connected:
+            print("✅ تم الاتصال بقاعدة بيانات MongoDB بنجاح!")
+        else:
+            print("⚠️ تعذر تأكيد الاتصال، جاري المتابعة...")
+    except Exception as e:
+        print(f"⚠️ تنبيه قاعدة البيانات: {e}")
+
     print("🚀 جاري إطلاق سورس الأمراء...")
     await app.start()
     print(f"🤖 البوت شغال الآن بمعرف: @{app.me.username}")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    from hydrogram import enums
     asyncio.run(main())

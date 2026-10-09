@@ -1,8 +1,9 @@
 # main.py
 import os
 import asyncio
+import logging
 from aiohttp import web
-from hydrogram import Client, filters, enums
+from hydrogram import Client, filters, enums, idle
 from hydrogram.types import (
     Message, 
     InlineKeyboardMarkup, 
@@ -17,7 +18,7 @@ import database as db
 from ai_engine import ask_gemini
 
 # ==========================================
-# 0. خادم ويب داخلي مخصص لإرضاء فحص Render ومنع الإيقاف
+# 0. خادم ويب داخلي مخصص لإرضاء فحص Render والسيرفرات
 # ==========================================
 async def start_web_server():
     async def handle(request):
@@ -66,92 +67,74 @@ DEV_KEYBOARD = ReplyKeyboardMarkup(
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
-    user_id = message.from_user.id
-    if user_id == config.DEV_ID:
-        caption = (
-            "▽ : اهلا بك عزيزي المطور\n"
-            "▽ : اليك اوامر الكيبورد الخاصه بك\n"
-            f"▽ : قناة السورس والتحديثات\n"
-            f"- {config.SOURCE_CHANNEL}"
-        )
-        return await message.reply_text(caption, reply_markup=DEV_KEYBOARD)
+    print(f"📩 وصل أمر ستارت من المستخدم: {message.from_user.id}")
+    try:
+        user_id = message.from_user.id
+        dev_id = int(config.DEV_ID)
 
-    welcome_text = (
-        f"▽ : أهلا بك في بوت {config.BOT_NAME}\n"
-        "▽ : لحماية المجموعات من التفليش\n"
-        "▽ : يمكنك تفعيل البوت كالاتي :\n"
-        "▽ : اضف البوت وارفعه مشرف في مجموعتك\n"
-        "▽ : ارسل {{ تفعيل }} ليتم تفعيل المجموعه\n"
-        f"▽ : يوزر البوت ← @{client.me.username}"
-    )
-    buttons = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("➕ اضفني لمجموعتك", url=f"https://t.me/{client.me.username}?startgroup=true"),
-            InlineKeyboardButton("قناه البوت ↗️", url=config.SOURCE_CHANNEL)
-        ],
-        [
-            InlineKeyboardButton("لتنصيب بوت ↗️", url=f"https://t.me/{config.DEV_USER}"),
-            InlineKeyboardButton("المطور ↗️", url=f"https://t.me/{config.DEV_USER}")
-        ],
-        [InlineKeyboardButton("سورس الأمراء ™️", url=config.SOURCE_CHANNEL)]
-    ])
-    await message.reply_text(welcome_text, reply_markup=buttons)
+        # تنظيف المعرفات تلقائياً من علامة @ لضمان صحة روابط تيليجرام
+        raw_dev = str(config.DEV_USER).replace("@", "").strip()
+        raw_channel = str(config.SOURCE_CHANNEL).replace("@", "").strip()
+        channel_url = f"https://t.me/{raw_channel}" if not str(config.SOURCE_CHANNEL).startswith("http") else str(config.SOURCE_CHANNEL)
+        dev_url = f"https://t.me/{raw_dev}"
+
+        if user_id == dev_id:
+            caption = (
+                "▽ : اهلا بك عزيزي المطور\n"
+                "▽ : اليك اوامر الكيبورد الخاصه بك\n"
+                f"▽ : قناة السورس والتحديثات\n"
+                f"- {channel_url}"
+            )
+            return await message.reply_text(caption, reply_markup=DEV_KEYBOARD)
+
+        welcome_text = (
+            f"▽ : أهلا بك في بوت {config.BOT_NAME}\n"
+            "▽ : لحماية المجموعات من التفليش\n"
+            "▽ : يمكنك تفعيل البوت كالاتي :\n"
+            "▽ : اضف البوت وارفعه مشرف في مجموعتك\n"
+            "▽ : ارسل {{ تفعيل }} ليتم تفعيل المجموعه\n"
+            f"▽ : يوزر البوت ← @{client.me.username}"
+        )
+        buttons = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("➕ اضفني لمجموعتك", url=f"https://t.me/{client.me.username}?startgroup=true"),
+                InlineKeyboardButton("قناه البوت ↗️", url=channel_url)
+            ],
+            [
+                InlineKeyboardButton("لتنصيب بوت ↗️", url=dev_url),
+                InlineKeyboardButton("المطور ↗️", url=dev_url)
+            ],
+            [InlineKeyboardButton("سورس الأمراء ™️", url=channel_url)]
+        ])
+        await message.reply_text(welcome_text, reply_markup=buttons)
+    except Exception as e:
+        print(f"❌ حدث خطأ أثناء معالجة أمر ستارت: {e}")
+        await message.reply_text("أهلاً بك في البوت! (تم استلام الأمر بنجاح).")
 
 @app.on_message(filters.command(["المطور", "مطور"], prefixes="") & filters.group)
 async def dev_command(client: Client, message: Message):
     try:
-        dev_chat = await client.get_chat(config.DEV_ID)
+        raw_channel = str(config.SOURCE_CHANNEL).replace("@", "").strip()
+        channel_url = f"https://t.me/{raw_channel}" if not str(config.SOURCE_CHANNEL).startswith("http") else str(config.SOURCE_CHANNEL)
+        
+        dev_chat = await client.get_chat(int(config.DEV_ID))
         caption = (
             "- 𝗠𝗲𝗲𝘁 𝗧𝗵𝗲 𝗖𝗿𝗲𝗮𝘁𝗼𝗿 🌟 :\n\n"
             f"» 𝗡𝗮𝗺𝗲: {config.DEV_NAME} 𓆩\n"
-            f"» 𝗨𝘀𝗲𝗿: @{config.DEV_USER}\n"
+            f"» 𝗨𝘀𝗲𝗿: @{str(config.DEV_USER).replace('@', '')}\n"
             f"» 𝗕𝗶𝗼: {dev_chat.bio or 'إِنَّ رَبِّي لَطِيفٌ لِّمَا يَشَاءُ إِنَّهُ هُوَ الْعَلِيمُ الْحَكِيمُ'}\n\n"
             "- 𝗦𝗲𝗲 𝗮 𝘀𝘁𝗼𝗿𝘆 𝘁𝗵𝗿𝗼𝘂𝗴𝗵 𝗵𝗶𝘀 𝘄𝗼𝗿𝗱𝘀 🌠."
         )
         buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("لحظات الأمراء | moments princes ↗️", url=config.SOURCE_CHANNEL)]
+            [InlineKeyboardButton("لحظات الأمراء | moments princes ↗️", url=channel_url)]
         ])
-        photos = [p async for p in client.get_chat_photos(config.DEV_ID, limit=1)]
+        photos = [p async for p in client.get_chat_photos(int(config.DEV_ID), limit=1)]
         if photos:
             await message.reply_photo(photo=photos[0].file_id, caption=caption, reply_markup=buttons)
         else:
             await message.reply_text(caption, reply_markup=buttons)
-    except Exception:
-        await message.reply_text(f"المطور: @{config.DEV_USER}")
-
-@app.on_message(filters.command(["المالك", "مالك"], prefixes="") & filters.group)
-async def owner_command(client: Client, message: Message):
-    owner = None
-    try:
-        async for m in client.get_chat_administrators(message.chat.id):
-            if m.status == ChatMemberStatus.OWNER:
-                owner = m.user
-                break
-        
-        if not owner:
-            return await message.reply_text("تعذر جلب مالك المجموعة.")
-        
-        owner_chat = await client.get_chat(owner.id)
-        caption = (
-            "- 𝗢𝘄𝗻𝗲𝗿'𝘀 𝗣𝗿𝗼𝗳𝗶𝗹𝗲 🥇 :\n\n"
-            f"» 𝗡𝗮𝗺𝗲: {owner.first_name}\n"
-            f"» 𝗨𝘀𝗲𝗿𝗻𝗮𝗺𝗲: @{owner.username or 'لا يوجد'}\n"
-            f"» 𝗕𝗶𝗼: {owner_chat.bio or 'لا يوجد بايو'}\n\n"
-            "- 𝗦𝗲𝗲 𝘄𝗵𝗼 𝗹𝗲𝗮𝗱𝘀 𝘆𝗼𝘂𝗿 𝗴𝗿𝗼𝘂𝗽 👑."
-        )
-        
-        group_url = f"https://t.me/{message.chat.username}" if message.chat.username else config.SOURCE_CHANNEL
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"+ 🏴‍☠️ {message.chat.title} ま + 🏴‍☠️", url=group_url)]
-        ])
-        
-        photos = [p async for p in client.get_chat_photos(owner.id, limit=1)]
-        if photos:
-            await message.reply_photo(photo=photos[0].file_id, caption=caption, reply_markup=buttons)
-        else:
-            await message.reply_text(caption, reply_markup=buttons)
-    except Exception:
-        await message.reply_text("حدث خطأ أثناء جلب معلومات المالك.")
+    except Exception as e:
+        await message.reply_text(f"المطور: @{str(config.DEV_USER).replace('@', '')}")
 
 @app.on_message(filters.command(["تفعيل"], prefixes="") & filters.group)
 async def activate_grp(client: Client, message: Message):
@@ -190,33 +173,25 @@ async def ai_chat_handler(client: Client, message: Message):
         reply = await ask_gemini(clean_text)
         await message.reply_text(reply)
 
-# محاولة تحميل الألعاب تلقائياً إن وجد الملف
-try:
-    import games
-except ImportError:
-    pass
-
 # ==========================================
 # 2. دالة التشغيل الرئيسية
 # ==========================================
 async def main():
-    # تشغيل خادم الويب أولاً لمنع انتهاء مهلة Render
     await start_web_server()
 
     print("⏳ جاري فحص الاتصال بقاعدة بيانات MongoDB...")
     try:
-        db_connected = await asyncio.wait_for(db.ping_db(), timeout=10)
+        db_connected = await asyncio.wait_for(db.ping_db(), timeout=5)
         if db_connected:
             print("✅ تم الاتصال بقاعدة بيانات MongoDB بنجاح!")
-        else:
-            print("⚠️ تعذر تأكيد الاتصال، جاري المتابعة...")
     except Exception as e:
         print(f"⚠️ تنبيه قاعدة البيانات: {e}")
 
     print("🚀 جاري إطلاق سورس الأمراء...")
     await app.start()
     print(f"🤖 البوت شغال الآن بمعرف: @{app.me.username}")
-    await asyncio.Event().wait()
+    await idle()
+    await app.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
